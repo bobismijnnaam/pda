@@ -23,16 +23,30 @@ case class nt(name: String) extends Ebnf {
 
 case class Production(nonTerminal: nt, production: Ebnf)
 
-case class ChooseAlt(i: Int) extends Info
-object OptNone extends Info
-object OptSome extends Info
-object StarDone extends Info
-object StarMore extends Info
-object PlusDone extends Info
-object PlusMore extends Info
-case class MatchToken(terminal: t) extends Info
-case class PushNt(nonTerminal: nt) extends Info
-case class PopNt(nonTerminal: nt) extends Info
+sealed trait CfgInfo extends Info {
+  override def toString: String = this match {
+    case ChooseAlt(i) => s"alt$i"
+    case OptNone => "none"
+    case OptSome => "some"
+    case StarDone => "*."
+    case StarMore => "*"
+    case PlusDone => "+."
+    case PlusMore => "+"
+    case MatchToken(terminal) => s"'${terminal.text}'"
+    case PushNt(nonTerminal) => s"↓${nonTerminal.name}"
+    case PopNt(nonTerminal) => s"↑${nonTerminal.name}"
+  }
+}
+case class ChooseAlt(i: Int) extends CfgInfo
+object OptNone extends CfgInfo
+object OptSome extends CfgInfo
+object StarDone extends CfgInfo
+object StarMore extends CfgInfo
+object PlusDone extends CfgInfo
+object PlusMore extends CfgInfo
+case class MatchToken(terminal: t) extends CfgInfo
+case class PushNt(nonTerminal: nt) extends CfgInfo
+case class PopNt(nonTerminal: nt) extends CfgInfo
 
 case class Cfg(productions: Production*) {
   val productionMap: Map[nt, Ebnf] = productions.map(p => p.nonTerminal -> p.production).toMap
@@ -56,9 +70,10 @@ case class Cfg(productions: Production*) {
     require(productionMap.contains(start))
 
     val states = ArrayBuffer[State]()
+    val stateNames = new Names
 
     def mkState(name: String): State = {
-      val state = State(name)
+      val state = State(stateNames(name))
       states += state
       state
     }
@@ -67,48 +82,50 @@ case class Cfg(productions: Production*) {
     val startState = productionMap.keys.map(nonTerminal => nonTerminal -> mkState(s"${nonTerminal.name}:start")).toMap
     val endState = productionMap.keys.map(nonTerminal => nonTerminal -> mkState(s"${nonTerminal.name}:end")).toMap
 
-    def connectEbnf(start: State, end: State, trail: String, ebnf: Ebnf): Unit =
+    val symbNames = new Names
+
+    def mkSymb(name: String): Symbol = Symbol(symbNames(name))
+
+    def connectEbnf(start: State, end: State, context: String, ebnf: Ebnf): Unit =
       ebnf match {
         case Alts(langs @ _*) =>
           langs.zipWithIndex.foreach { case (lang, idx) =>
-            val altTrail = s"$trail:alt$idx"
-            val altStart = mkState(s"$altTrail:start")
+            val altStart = mkState(context)
             transitions += Transition(start, TransLabel.epsilon, altStart)(ChooseAlt(idx))
-            connectEbnf(altStart, end, altTrail, lang)
+            connectEbnf(altStart, end, context, lang)
           }
         case Seqn(langs @ _*) =>
-          val intermediates = langs.indices.tail.map(i => mkState(s"$trail:seqn$i"))
+          val intermediates = langs.indices.tail.map(i => mkState(context))
           langs.zip(start +: intermediates).zip(intermediates :+ end).zipWithIndex.foreach {
             case (((lang, start), end), idx) =>
-              val seqnTrail = s"$trail:seqn$idx"
-              connectEbnf(start, end, seqnTrail, lang)
+              connectEbnf(start, end, context, lang)
           }
         case Opt(lang) =>
           transitions += Transition(start, TransLabel.epsilon, end)(OptNone)
-          val chooseSome = mkState(s"$trail:some")
+          val chooseSome = mkState(context)
           transitions += Transition(start, TransLabel.epsilon, chooseSome)(OptSome)
-          connectEbnf(chooseSome, end, s"$trail:some", lang)
+          connectEbnf(chooseSome, end, context, lang)
         case Star(lang) =>
           transitions += Transition(start, TransLabel.epsilon, end)(StarDone)
-          val chooseMore = mkState(s"$trail:more")
+          val chooseMore = mkState(context)
           transitions += Transition(start, TransLabel.epsilon, chooseMore)(StarMore)
-          connectEbnf(chooseMore, start /* ! */, s"$trail:more", lang)
+          connectEbnf(chooseMore, start /* ! */, context, lang)
         case Plus(lang) =>
-          val decisionState = mkState(s"$trail:plus")
+          val decisionState = mkState(context)
           transitions += Transition(decisionState, TransLabel.epsilon, start)(PlusMore)
           transitions += Transition(decisionState, TransLabel.epsilon, end)(PlusDone)
-          connectEbnf(start, decisionState, s"$trail:plus", lang)
+          connectEbnf(start, decisionState, context, lang)
         case terminal @ t(text) =>
-          val intermediates = text.indices.tail.map(i => mkState(s"$trail:char$i"))
+          val intermediates = text.indices.tail.map(i => mkState(context))
           text.zip(start +: intermediates).zip(intermediates :+ end).zipWithIndex.foreach {
             case (((c, start), end), idx) =>
               val infos: Seq[Info] = if(idx == 0) Seq(MatchToken(terminal)) else Nil
               transitions += Transition(start, TransLabel.character(Character(c)), end)(infos: _*)
           }
         case nonTerminal @ nt(name) =>
-          val ntTrail = s"$trail:$name"
-          transitions += Transition(start, TransLabel.push(Symbol(ntTrail)), startState(nonTerminal))(PushNt(nonTerminal))
-          transitions += Transition(endState(nonTerminal), TransLabel.pop(Symbol(ntTrail)), end)(PopNt(nonTerminal))
+          val symbol = mkSymb(s"$context:$name")
+          transitions += Transition(start, TransLabel.push(symbol), startState(nonTerminal))(PushNt(nonTerminal))
+          transitions += Transition(endState(nonTerminal), TransLabel.pop(symbol), end)(PopNt(nonTerminal))
       }
 
     for((nonTerminal, lang) <- productionMap) {

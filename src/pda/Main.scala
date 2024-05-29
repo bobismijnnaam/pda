@@ -68,7 +68,7 @@ case class State(name: String)
 trait Info
 case class Transition(left: State, cond: TransLabel, right: State)(val info: Info*) {
   def label: String = {
-    val infos = info.mkString(" /*", " ", "*/")
+    val infos = info.mkString(" [", " ", "]")
     s"$cond$infos"
   }
 
@@ -84,7 +84,7 @@ case class Pda(states: Seq[State], transs: Seq[Transition], s0: State, accept: S
 
   def toDot(): Unit =
     Using.resource(Files.newBufferedWriter(Paths.get(s"${s0.name}.dot"))) { writer =>
-      def quote(s: String): String = s"\"$s\""
+      def quote(s: String): String = s"\"${s.replace("\n", "\\n")}\""
 
       writer.write("digraph {\n")
 
@@ -100,8 +100,10 @@ case class Pda(states: Seq[State], transs: Seq[Transition], s0: State, accept: S
         }
       }
 
-      for(trans <- transs) {
-        writer.write(s"${quote(trans.left.name)} -> ${quote(trans.right.name)} [label=${quote(trans.label)}]")
+      val transitionsByPairs = transs.groupBy(t => (t.left, t.right))
+
+      for(((left, right), transs) <- transitionsByPairs) {
+        writer.write(s"${quote(left.name)} -> ${quote(right.name)} [label=${quote(transs.map(_.label).mkString("\n"))}]")
       }
 
       writer.write("}\n")
