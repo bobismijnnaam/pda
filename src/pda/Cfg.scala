@@ -2,6 +2,8 @@ package pda
 
 import scala.collection.mutable.ArrayBuffer
 
+import Pda._
+
 sealed trait Ebnf {
   def +(right: Ebnf): Ebnf = Seqn(this, right)
   def opt: Ebnf = Opt(this)
